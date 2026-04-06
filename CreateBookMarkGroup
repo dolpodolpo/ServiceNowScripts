@@ -1,0 +1,145 @@
+
+(function() {
+    // =========================
+    // CONFIG
+    // =========================
+    var TARGET_USER_GROUP_NAMES = [
+        'C_Permission_ITIL',
+        // Make sure this matches the real name exactly:
+        'C_Permission_ITIL_Incident_Service_Request'
+    ];
+    // Only touch bookmarks that match this filter for each user
+    var BOOKMARK_ENCODED_QUERY = "titleLIKEKnowledge^auto_add=false";
+    // Per-user Bookmark Group properties
+    var BM_GROUP_TITLE = "Knowledge";
+    var BM_GROUP_COLOR = "green";
+    var BM_GROUP_ORDER = 40;
+    // Safety switches
+    var DRY_RUN = true; // <-- set false to actually insert/update
+    var OVERWRITE_EXISTING_GROUP = false; // if true, update even if bookmark already has a group
+    var MAX_USERS = 0; // 0 = unlimited
+    var MAX_BOOKMARK_UPDATES = 0; // 0 = unlimited
+    // =========================
+    // Helper: log
+    // =========================
+    function log(msg) {
+        gs.print("[BM Group Backfill] " + msg);
+    }
+    // =========================
+    // Step 1: Resolve group sys_ids by name
+    // =========================
+    var groupIds = [];
+    var g = new GlideRecord('sys_user_group');
+    g.addQuery('name', 'IN', TARGET_USER_GROUP_NAMES.join(','));
+    g.query();
+    while (g.next()) groupIds.push(g.getUniqueValue());
+    if (groupIds.length === 0) {
+        log("No matching sys_user_group records found for: " + TARGET_USER_GROUP_NAMES.join(" | "));
+        return;
+    }
+    log("Target groups found: " + groupIds.length);
+    // =========================
+    // Step 2: Unique ACTIVE users from memberships
+    // =========================
+    var users = {};
+    var m = new GlideRecord('sys_user_grmember');
+    m.addQuery('group', 'IN', groupIds.join(','));
+    m.addEncodedQuery('user.active=true'); // <-- only active users
+    m.query();
+    while (m.next()) {
+        var uid = m.getValue('user');
+        if (uid) users[uid] = true;
+    }
+    var userIds = Object.keys(users);
+    log("Eligible ACTIVE users: " + userIds.length);
+    if (MAX_USERS > 0 && userIds.length > MAX_USERS) {
+        userIds = userIds.slice(0, MAX_USERS);
+        log("MAX_USERS applied. Processing only: " + userIds.length);
+    }
+    // =========================
+    // Step 3: For each user → update qualifying bookmarks;
+    //          create the group lazily only if needed
+    // =========================
+    var createdGroups = 0,
+        reusedGroups = 0,
+        updatedBookmarks = 0,
+        scannedBookmarks = 0,
+        usersWithAtLeastOneUpdate = 0;
+    for (var i = 0; i < userIds.length; i++) {
+        var userId = userIds[i];
+        // Pull user’s bookmarks that match the filter
+        var b = new GlideRecord('sys_ui_bookmark');
+        b.addQuery('user', userId);
+        b.addEncodedQuery(BOOKMARK_ENCODED_QUERY);
+        if (!OVERWRITE_EXISTING_GROUP) {
+            // Only assign a group if currently ungrouped (non-destructive)
+            b.addNullQuery('group');
+        }
+        b.query();
+        // If there are none to update for this user, skip creating any group
+        if (!b.hasNext()) {
+            continue;
+        }
+        // We only get here if at least one bookmark qualifies for this user
+        usersWithAtLeastOneUpdate++;
+        // Find (or create) the user's bookmark group **now** (lazy creation)
+        var bookmarkGroupSysId = "";
+        var bg = new GlideRecord('sys_ui_bookmark_group');
+        bg.addQuery('user', userId);
+        bg.addQuery('title', BM_GROUP_TITLE);
+        bg.addQuery('order', BM_GROUP_ORDER);
+        bg.addQuery('color', BM_GROUP_COLOR);
+        bg.query();
+        if (bg.next()) {
+            bookmarkGroupSysId = bg.getUniqueValue();
+            reusedGroups++;
+        } else {
+            if (!DRY_RUN) {
+                bg.initialize();
+                bg.user = userId;
+                bg.title = BM_GROUP_TITLE;
+                bg.color = BM_GROUP_COLOR;
+                bg.order = BM_GROUP_ORDER;
+                bookmarkGroupSysId = bg.insert();
+            } else {
+                bookmarkGroupSysId = "<DRY_RUN_GROUP_SYS_ID>";
+            }
+            createdGroups++;
+        }
+        // Move/assign the user’s qualifying bookmarks into that group
+        // Note: We must requery or reuse `b` iterator properly
+        b.reset();
+        b.addQuery('user', userId);
+        b.addEncodedQuery(BOOKMARK_ENCODED_QUERY);
+        if (!OVERWRITE_EXISTING_GROUP) b.addNullQuery('group');
+        b.query();
+        while (b.next()) {
+            scannedBookmarks++;
+            if (MAX_BOOKMARK_UPDATES > 0 && updatedBookmarks >= MAX_BOOKMARK_UPDATES) {
+                log("MAX_BOOKMARK_UPDATES reached: " + MAX_BOOKMARK_UPDATES + ". Stopping.");
+                // Summary
+                log("DONE (partial). DRY_RUN=" + DRY_RUN);
+                log("Users with updates: " + usersWithAtLeastOneUpdate);
+                log("Groups created: " + createdGroups);
+                log("Groups reused: " + reusedGroups);
+                log("Bookmarks scanned: " + scannedBookmarks);
+                log("Bookmarks updated: " + updatedBookmarks);
+                return;
+            }
+            if (!DRY_RUN) {
+                b.setValue('group', bookmarkGroupSysId);
+                b.update();
+            }
+            updatedBookmarks++;
+        }
+    }
+    // =========================
+    // Summary
+    // =========================
+    log("DONE. DRY_RUN=" + DRY_RUN);
+    log("Users with at least one qualifying bookmark: " + usersWithAtLeastOneUpdate);
+    log("Groups created: " + createdGroups);
+    log("Groups reused: " + reusedGroups);
+    log("Bookmarks scanned: " + scannedBookmarks);
+    log("Bookmarks updated: " + updatedBookmarks);
+})();
