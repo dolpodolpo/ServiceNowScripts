@@ -1,0 +1,163 @@
+
+/**
+ * C_BookmarkSeeder - Clone template bookmarks to users in target groups.
+ * - Supports DRY_RUN preview
+ * - Prevents duplicates per user (same title + url)
+ * - Logs totals and details
+ *
+ * Run in Background Scripts (Global).
+ */
+/*** CONFIG ***/
+var DRY_RUN = true; // <-- set to false to actually insert
+var GROUP_NAMES = [
+    'C_Permission_ITIL',
+    'C_Permission_ITIL_Incident_Service_Request'
+];
+// Template bookmarks to clone (your original condition)
+var BOOKMARK_TEMPLATE_QUERY = 'titleLIKEKnowledge^auto_add=true';
+// Default overrides for the cloned user bookmarks
+var DEFAULTS = {
+    auto_add: false,
+    open_in_form: true,
+    pinned: true,
+    uncancelable: false
+};
+// Optional: special-case image for a specific title
+var HOME_IMAGE_OVERRIDE = {
+    matchTitle: 'Home',
+    image: 'images/icons/home_16.gif'
+};
+/*** RUNTIME ***/
+var logSource = 'C_BookmarkSeeder';
+function log(msg) {
+    gs.print(msg);
+    gs.info(msg, logSource);
+}
+var started = new GlideDateTime();
+// 1) Get unique users from target groups (active users only)
+var users = getTargetUsers(GROUP_NAMES);
+var userCount = users.length;
+log('--- C_BookmarkSeeder START ---');
+log('DRY_RUN: ' + DRY_RUN);
+log('Target groups: ' + GROUP_NAMES.join(', '));
+log('Unique users detected: ' + userCount);
+// 2) Load template bookmarks once
+var templates = getTemplateBookmarks(BOOKMARK_TEMPLATE_QUERY);
+var templateCount = templates.length;
+log('Template bookmarks matched by query [' + BOOKMARK_TEMPLATE_QUERY + ']: ' + templateCount);
+if (userCount === 0 || templateCount === 0) {
+    log('Nothing to do (no users or no templates). Exiting.');
+    summarizeAndExit();
+}
+// 3) Iterate users × templates with duplicate protection
+var createdCount = 0;
+var skippedExistsCount = 0;
+var errorCount = 0;
+for (var i = 0; i < users.length; i++) {
+    var userId = users[i];
+    for (var t = 0; t < templates.length; t++) {
+        var tmpl = templates[t];
+        // Check if user already has a bookmark with same (title + url)
+        if (bookmarkExistsForUser(userId, tmpl.title, tmpl.url)) {
+            skippedExistsCount++;
+            // Uncomment for verbose per-item logs:
+            // log('SKIP (exists) | user=' + userId + ' | ' + tmpl.title + ' | ' + tmpl.url);
+            continue;
+        }
+        // Prepare the clone
+        if (!DRY_RUN) {
+            try {
+                var nb = new GlideRecord('sys_ui_bookmark');
+                nb.initialize();
+                // Copy from template
+                nb.url = tmpl.url;
+                nb.title = tmpl.title;
+                nb.order = tmpl.order;
+                nb.flyout = tmpl.flyout;
+                nb.icon = tmpl.icon;
+                nb.color = tmpl.color;
+                nb.image = tmpl.image; // may be overridden below
+                nb.flyout_sizing = tmpl.flyout_sizing;
+                // Apply defaults/overrides
+                nb.auto_add = DEFAULTS.auto_add;
+                nb.open_in_form = DEFAULTS.open_in_form;
+                nb.pinned = DEFAULTS.pinned;
+                nb.uncancelable = DEFAULTS.uncancelable;
+                // Assign to user
+                nb.user = userId;
+                // Optional special-case override for "Home"
+                if (HOME_IMAGE_OVERRIDE && tmpl.title === HOME_IMAGE_OVERRIDE.matchTitle) {
+                    nb.image = HOME_IMAGE_OVERRIDE.image;
+                }
+                nb.insert();
+                createdCount++;
+                // Uncomment for verbose success logs:
+                // log('CREATE | user=' + userId + ' | ' + tmpl.title + ' | ' + tmpl.url);
+            } catch (e) {
+                errorCount++;
+                log('ERROR inserting for user=' + userId + ' | title=' + tmpl.title + ' | url=' + tmpl.url + ' | ' + e);
+            }
+        } else {
+            // DRY RUN path: don’t insert, just count & optionally log
+            createdCount++;
+            // Uncomment for verbose dry-run logs:
+            // log('WOULD CREATE | user=' + userId + ' | ' + tmpl.title + ' | ' + tmpl.url);
+        }
+    }
+}
+// 4) Summary
+summarizeAndExit();
+/*** Helpers ***/
+function getTargetUsers(groupNamesArr) {
+    var arr = [];
+    if (!groupNamesArr || groupNamesArr.length === 0) return arr;
+    var ga = new GlideAggregate('sys_user_grmember');
+    ga.addEncodedQuery('group.nameIN' + groupNamesArr.join(',') + '^user.active=true');
+    ga.groupBy('user'); // ensures uniqueness at the DB
+    ga.query();
+    while (ga.next()) {
+        arr.push(ga.getValue('user')); // sys_id of sys_user
+    }
+    return arr;
+}
+function getTemplateBookmarks(encodedQuery) {
+    var list = [];
+    var gr = new GlideRecord('sys_ui_bookmark');
+    gr.addEncodedQuery(encodedQuery);
+    gr.query();
+    while (gr.next()) {
+        list.push({
+            url: gr.getValue('url'),
+            title: gr.getValue('title'),
+            order: gr.getValue('order'),
+            flyout: gr.getValue('flyout'),
+            icon: gr.getValue('icon'),
+            color: gr.getValue('color'),
+            image: gr.getValue('image'),
+            flyout_sizing: gr.getValue('flyout_sizing')
+        });
+    }
+    return list;
+}
+function bookmarkExistsForUser(userId, title, url) {
+    var ex = new GlideRecord('sys_ui_bookmark');
+    ex.addQuery('user', userId);
+    ex.addQuery('title', title);
+    ex.addQuery('url', url);
+    ex.setLimit(1);
+    ex.query();
+    return ex.hasNext();
+}
+function summarizeAndExit() {
+    var ended = new GlideDateTime();
+    var durationMS = ended.getNumericValue() - started.getNumericValue();
+    log('--- SUMMARY ---');
+    log('Users detected: ' + userCount);
+    log('Template bookmarks: ' + templateCount);
+    log('DRY_RUN: ' + DRY_RUN);
+    log((DRY_RUN ? 'Would create' : 'Created') + ': ' + createdCount);
+    log('Skipped (already exists): ' + skippedExistsCount);
+    log('Errors: ' + errorCount);
+    log('Duration (ms): ' + durationMS);
+    log('--- C_BookmarkSeeder END ---');
+}
