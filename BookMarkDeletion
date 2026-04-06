@@ -1,0 +1,68 @@
+
+(function () {
+    var TABLE = 'sys_ui_bookmark';
+    var ENCODED_QUERY = "titleLIKEKnowledge^sys_created_onONToday@javascript:gs.beginningOfToday()@javascript:gs.endOfToday()^sys_created_by=adolfrenz.montaner@ivoclar.com^auto_add=false";
+    // 🔐 Safety Controls
+    var DRY_RUN = false;        // set true to preview
+    var MAX_DELETE = 120000;    // allow up to 120k matched (so 98k won't abort)
+    var BATCH_SIZE = 1000;      // delete 1000 per batch
+    var PER_RUN_CAP = 10000;    // delete max 10k per execution (re-run as needed)
+    var LOG_EVERY = 1000;       // log progress every N deletes
+    // --- Guard: query must not be empty ---
+    if (!ENCODED_QUERY || ENCODED_QUERY.trim() === "") {
+        gs.error("[Bookmark Delete] ABORTED: Encoded query is empty.");
+        return;
+    }
+    // --- Count matched ---
+    var cnt = new GlideRecord(TABLE);
+    cnt.addEncodedQuery(ENCODED_QUERY);
+    cnt.query();
+    var matched = cnt.getRowCount();
+    gs.info("[Bookmark Delete] EncodedQuery: " + ENCODED_QUERY);
+    gs.info("[Bookmark Delete] Matched: " + matched);
+    gs.info("[Bookmark Delete] DRY_RUN=" + DRY_RUN + " | MAX_DELETE=" + MAX_DELETE + " | BATCH_SIZE=" + BATCH_SIZE + " | PER_RUN_CAP=" + PER_RUN_CAP);
+    if (matched === 0) {
+        gs.info("[Bookmark Delete] Nothing to delete.");
+        return;
+    }
+    if (matched > MAX_DELETE) {
+        gs.error("[Bookmark Delete] ABORTED: matched (" + matched + ") exceeds MAX_DELETE (" + MAX_DELETE + ").");
+        return;
+    }
+    // --- Dry run sample (optional) ---
+    if (DRY_RUN) {
+        var sample = 0;
+        while (cnt.next() && sample < 25) {
+            sample++;
+            gs.info("[DRY_RUN] Would delete sys_id=" + cnt.getUniqueValue() +
+                " | title=" + cnt.getValue("title") +
+                " | url=" + cnt.getValue("url") +
+                " | user=" + cnt.getDisplayValue("user"));
+        }
+        gs.info("[DRY_RUN] Sample printed: " + sample + ". Set DRY_RUN=false to delete.");
+        return;
+    }
+    // --- Delete in batches, capped per run ---
+    var deletedTotal = 0;
+    while (deletedTotal < PER_RUN_CAP) {
+        var gr = new GlideRecord(TABLE);
+        gr.addEncodedQuery(ENCODED_QUERY);
+        gr.setLimit(BATCH_SIZE);
+        gr.query();
+        if (!gr.hasNext()) {
+            gs.info("[Bookmark Delete] No more records found. Exiting.");
+            break;
+        }
+        while (gr.next()) {
+            gr.deleteRecord();
+            deletedTotal++;
+            if (deletedTotal % LOG_EVERY === 0) {
+                gs.info("[Bookmark Delete] Progress: deleted " + deletedTotal + " in this run...");
+            }
+            if (deletedTotal >= PER_RUN_CAP) {
+                break;
+            }
+        }
+    }
+    gs.info("[Bookmark Delete] Completed this run. Deleted=" + deletedTotal + ". Re-run to continue if matched was larger than PER_RUN_CAP.");
+})();
