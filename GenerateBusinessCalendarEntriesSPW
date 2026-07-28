@@ -1,0 +1,5 @@
+var gen = new GregorianCalendarGenerator();
+
+gen.createSpans(2030, 21); 
+
+gs.print('Business calendar generated through 2050.');
