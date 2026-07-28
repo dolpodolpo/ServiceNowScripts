@@ -1,0 +1,59 @@
+(function() {
+
+    var DRY_RUN = true; // true = report only, false = delete
+
+    var BOOKMARKS_TO_CLEAN = [
+        'Knowledge - My Knowledge Articles',
+        'Knowledge - Create New',
+        'Knowledge - Import Article',
+        'Knowledge - Retired',
+        'Knowledge - Published',
+        'Knowledge - Unpublished',
+        'Knowledge - All Blocks',
+        'Knowledge - My Flagged',
+        'Knowledge Management Overview'
+    ];
+
+    var ROLE_KB_AUTHOR = 'cb4eaf06c3f7b690b643f29dc00131fb';
+    var ROLE_KB_MANAGER = '429e6746c3f7b690b643f29dc0013106';
+
+    var processed = 0;
+
+    var bm = new GlideRecord('sys_ui_bookmark');
+    bm.addQuery('title', 'IN', BOOKMARKS_TO_CLEAN.join(','));
+    bm.query();
+
+    while (bm.next()) {
+
+        var roleGr = new GlideRecord('sys_user_has_role');
+        roleGr.addQuery('user', bm.user);
+        roleGr.addQuery('role', 'IN', ROLE_KB_AUTHOR + ',' + ROLE_KB_MANAGER);
+        roleGr.setLimit(1);
+        roleGr.query();
+
+        // User does NOT have Author or Manager role
+        if (!roleGr.hasNext()) {
+
+            var msg =
+                'Bookmark: "' + bm.getValue('title') +
+                '" | User: ' + bm.user.getDisplayValue() +
+                '" | Bookmark Sys ID: ' + bm.getUniqueValue();
+
+            if (DRY_RUN) {
+                gs.print('[DRY RUN] Would delete -> ' + msg);
+            } else {
+                gs.print('[DELETE] ' + msg);
+                bm.deleteRecord();
+            }
+
+            processed++;
+        }
+    }
+
+    gs.print('');
+    gs.print('========================================');
+    gs.print('Mode: ' + (DRY_RUN ? 'DRY RUN' : 'DELETE'));
+    gs.print('Total bookmarks processed: ' + processed);
+    gs.print('========================================');
+
+})();
