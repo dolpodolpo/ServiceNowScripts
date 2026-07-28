@@ -1,0 +1,29 @@
+(function() {
+
+    var USER_CRITERIA_SYS_ID = '64e436f587dbb214dae12f0f8bbb355d'; // C_KB_User
+
+    var gr = new GlideRecord('kb_knowledge');
+    gr.query();
+
+    var count = 0;
+
+    while (gr.next()) {
+
+        // Set Audience
+        gr.setValue('u_audience', 'end_user');
+
+        // Preserve existing criteria and add C_KB_User if missing
+        var criteria = gr.getValue('can_read_user_criteria') || '';
+
+        if (criteria.indexOf(USER_CRITERIA_SYS_ID) === -1) {
+            criteria = criteria ? criteria + ',' + USER_CRITERIA_SYS_ID : USER_CRITERIA_SYS_ID;
+            gr.setValue('can_read_user_criteria', criteria);
+        }
+
+        gr.update();
+        count++;
+    }
+
+    gs.print('Updated ' + count + ' knowledge articles.');
+
+})();
